@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>
+        Sample Map
+    </title>
+
+    <meta charset="utf-8">
+    <meta name="description" content="Sample Map for Resolve BI component">
+
+    <link rel="stylesheet" href="/css/leaflet.css" />
+
+    <script src="js/leaflet.js"></script>
+    <script src="/js/TileLayer.ColorFilter.js"></script>
+    <script src="/js/L.Path.DashFlow.js"></script>
+    <script src="/js/route.js"></script>
+    <script src="/js/heatmap.js"></script>
+    <script src="/js/leaflet-heatmap.js"></script>
+
+    <script src="js/rplus_bridge_utils.js"></script>
+
+</head>
+
+<body>
+    <div id="map" style="z-index: 3; width: auto; height: 600px;"></div>
+</body>
+
+<script>
+    var global = global || window;
+
+    let map = null
+
+    let congestion = []
+
+    let combineddata = []
+    let markerdata = []
+    let trafficdata = []
+
+    let currentMarker = {
+        markerID: 0,
+        latitude: 0,
+        longitude: 0
+    }
+
+    const CARCOLOR = "orange"
+    const BUSCOLOR = "green"
+    const TRUCKCOLOR = "purple"
+
+    const carCounts = []
+    const busCounts = []
+    const truckCounts = []
+
+    const totalCar = 0
+    const totalBus = 0
+    const totalTruck = 0
+
+    window.RPBridgeListener = {
+        dataReady: function (tabularData) {
+            console.log(tabularData);
+            combineddata = tabularData.data.map(item => {
+                var obj = {};
+                tabularData.metadata.columns.forEach((field, index) => {
+                  obj[field.name] = item[index];
+                });
+                return obj;
+            });
+            markerdata = combineddata.map(obj => ({ markerID: obj["A.markerID"], latitude: obj["A.latitude"], longitude: obj["A.longitude"] })).filter((obj, index, self) =>
+                index === self.findIndex((t) => t.markerID === obj.markerID)
+            );
+            trafficdata = combineddata.map(obj => ({id: obj.id, start_time: obj.start_time, marker: obj.marker, vehicle_type: obj.vehicle_type, count: obj.count, min_speed: obj.min_speed, mean_speed: obj.mean_speed, max_speed: obj.max_speed, end_time: obj.end_time, overspeeds: obj.overspeeds, wrongways: obj.wrongways, breakdowns: obj.breakdowns, computedEndTime: obj.computedStartTime, computedEndTime: obj.computedEndTime})).filter(obj => obj.id != null);
+            initMap();
+        }
+    };
+
+    RPBridgeUtils.notifyExtensionIsReady();
+
+    function initMap() {
+        map = L.map('map').setView([40.7817176, -73.248176], 10);
+
+        // set up color filters
+        let myFilter = [
+            'blur:0px',
+            'brightness:95%',
+            'contrast:100%',
+            'grayscale:0%',
+            'hue:290deg',
+            'opacity:100%',
+            'invert:0%',
+            'saturate:0%',
+            'sepia:0%',
+        ];
+
+        const tiles = L.tileLayer.colorFilter('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 16,
+            attribution: '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+            filter: myFilter,
+        }).addTo(map);
+
+        loadMarkers(markerdata);
+
+        currentMarker = markerdata[0]; // select first marker by default
+
+        addVehicleCounts('CAR')
+        addVehicleCounts('BUS')
+        addVehicleCounts('TRUCK')
+
+        showHeatmap()
+
+        addCongestion()
+
+    }
+
+    function addVehicleCounts(vehtype) {
+
+        trafficdata.forEach(m => {
+
+            if (vehtype !== m.vehicle_type) return; // this is like a continue in for each loop
+
+            // get lat and long from markers
+            const latitude = markerdata.find(x => x.markerID == m.marker).latitude;
+            const longitude = markerdata.find(x => x.markerID == m.marker).longitude;
+
+            let vehcolor = "blue"
+            let latoffset = 0;
+            let lonoffset = 0;
+            let iconoffset = 0;
+            let htmlcard = '';
+
+            if (m.vehicle_type == "CAR") {
+                totalCar.value += m.count;
+                vehcolor = CARCOLOR
+                latoffset = -40
+                lonoffset = 20
+                htmlcard = "<div style='text-align: center; padding: 10px 0; width: 40px; height: 40px; background-size: 40px 40px; border-radius: 50%; background-color:" + CARCOLOR + "; color: white; font-size: 1em'>" + m.count + '</div>'
+            }
+
+            if (m.vehicle_type == "BUS") {
+                totalBus.value += m.count;
+                vehcolor = BUSCOLOR
+                latoffset = 40
+                lonoffset = -20
+                htmlcard = "<div style='text-align: center; padding: 10px 0; width: 40px; height: 40px; background-size: 40px 40px; border-radius: 50%; background-color:" + BUSCOLOR + "; color: white; font-size: 1em'>" + m.count + '</div>'
+            }
+
+            if (m.vehicle_type == "TRUCK") {
+                totalTruck.value += m.count;
+                vehcolor = TRUCKCOLOR
+                latoffset = 40
+                lonoffset = 60
+                htmlcard = "<div style='text-align: center; padding: 10px 0; width: 40px; height: 40px; background-size: 40px 40px; border-radius: 50%; background-color:" + TRUCKCOLOR + "; color: white; font-size: 1em'>" + m.count + '</div>'
+            }
+
+            var numberIcon = L.divIcon({
+                className: "number-icon",
+                shadowSize: [0, 0], // size of the shadow
+                iconAnchor: [latoffset, lonoffset],
+                iconSize: [40, 40],
+                shadowAnchor: [0, 0],  // the same for the shadow
+                popupAnchor: [0, 0],
+                html: htmlcard
+            });
+
+            const counter = L.marker([latitude, longitude], {
+                icon: numberIcon
+            }).addTo(map);
+
+            if (m.vehicle_type == 'CAR') {
+                carCounts.push(counter);
+            }
+
+            if (m.vehicle_type == 'BUS') {
+                busCounts.push(counter);
+            }
+
+            if (m.vehicle_type == 'TRUCK') {
+                truckCounts.push(counter);
+            }
+
+        });
+
+    }
+
+
+    function loadMarkers(markerdata) {
+
+        markerdata.forEach(m => {
+            const marker = L.marker([m.latitude, m.longitude], {
+                id: m.markerID
+            }).addTo(map);
+
+            // click on marker zooms to that marker
+            marker.on('click', function (e) {
+
+                removeHighlightedMarker();
+
+                map.flyTo(e.latlng, 16);
+
+                // highlight this marker as the selected analysis point
+                const circle = L.circleMarker([m.latitude, m.longitude], {
+                    id: this.options.id,
+                    color: '#87CEFA',
+                    dashArray: "30,15",
+                    dashSpeed: -30,
+                    fillColor: '#87CEFA',
+                    fillOpacity: 0.2,
+                    radius: 100
+                }).addTo(map);
+
+                currentMarker = circle;
+
+            });
+        });
+
+    }
+
+    function showHeatmap() {
+
+        let heatmap = [];
+
+        markerdata.forEach(m => {
+            heatmap.push(
+                {
+                    lat: m.latitude,
+                    lng: m.longitude,
+                    count: Math.floor(Math.random() * 10)
+                }
+            )
+        });
+
+        var testData = {
+            max: heatmap.length,
+            data: heatmap
+        };
+
+        var cfg = {
+            // radius should be small ONLY if scaleRadius is true (or small radius is intended)
+            // if scaleRadius is false it will be the constant radius used in pixels
+            "radius": 120,
+            "maxOpacity": .5,
+            // scales the radius based on map zoom
+            "scaleRadius": false,
+            // if set to false the heatmap uses the global maximum for colorization
+            // if activated: uses the data maximum within the current map boundaries
+            //   (there will always be a red spot with useLocalExtremas true)
+            "useLocalExtrema": true,
+            // which field name in your data represents the latitude - default "lat"
+            latField: 'lat',
+            // which field name in your data represents the longitude - default "lng"
+            lngField: 'lng',
+            // which field name in your data represents the data value - default "value"
+            valueField: 'count',
+            gradient: {
+                '0.0': 'cornsilk',
+                '0.2': 'wheat',
+                '0.4': 'tan',
+                '0.6': 'peru',
+                '0.8': 'sienna',
+                '1.0': 'maroon'
+            }
+        };
+
+        heatmapLayer = new HeatmapOverlay(cfg);
+
+        heatmapLayer.setData(testData);
+
+        heatmapLayer.addTo(map);
+
+    }
+
+    function removeHighlightedMarker() {
+        if (map.hasLayer(currentMarker)) {
+            map.removeLayer(currentMarker);
+        }
+    }
+
+    function addCongestion() {
+
+        for (var road = 0, roads = [], nroads = route.length; road < nroads; road++) {
+            let latlngs = [];
+            let segment = 0;
+            var nsegments = 0;
+            //console.log('Road', road)
+            for (nsegments = route[road].length; segment < nsegments; segment++) {
+                //console.log('Segment', segment)
+                if (route[road][segment] === undefined) {
+                    //console.log('OOOPS!!!!', )
+                }
+
+                latlngs.push({
+                    "lat": route[road][segment][1],
+                    "lon": route[road][segment][0]
+                });
+
+            }
+
+            // add in the sim
+
+            // Traffic Flowing Normal (Green)
+
+            let normalOrdinates = [];
+            let slowOrdinates = [];
+            let stoppedOrdinates = [];
+
+            latlngs.forEach(element => {
+                let choice = Math.random();
+                if (choice < 0.3) {
+                    normalOrdinates.push(new L.LatLng(element.lat, element.lon));
+                }
+                else if (choice < 0.9) {
+                    slowOrdinates.push(new L.LatLng(element.lat, element.lon));
+                }
+                else {
+                    stoppedOrdinates.push(new L.LatLng(element.lat, element.lon));
+                }
+            });
+
+            const normalTraffic = L.polyline(normalOrdinates, {
+                dashArray: "20,20",
+                dashSpeed: -40,
+                weight: 4,
+                opacity: 1,
+                color: "green"
+            }).addTo(map);
+
+            const slowTraffic = L.polyline(slowOrdinates, {
+                dashArray: "20,20",
+                dashSpeed: -10,
+                weight: 4,
+                opacity: 1,
+                color: "orange"
+            }).addTo(map);
+
+            const stoppedTraffic = L.polyline(stoppedOrdinates, {
+                dashArray: "20,20",
+                dashSpeed: 0,
+                weight: 4,
+                opacity: 1,
+                color: "red"
+            }).addTo(map);
+
+            congestion.push(normalTraffic);
+            congestion.push(slowTraffic);
+            congestion.push(stoppedTraffic);
+
+        }
+
+    }
+
+
+</script>
+
+</html>
